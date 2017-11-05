@@ -4,6 +4,7 @@ Support for Xiaomi Yeelight Wifi color bulb.
 For more details about this platform, please refer to the documentation at
 https://home-assistant.io/components/light.yeelight/
 """
+import os
 import logging
 import colorsys
 from typing import Tuple
@@ -16,15 +17,19 @@ from homeassistant.util.color import (
     color_temperature_to_rgb,
     color_RGB_to_xy,
     color_xy_brightness_to_RGB)
-from homeassistant.const import CONF_DEVICES, CONF_NAME
+from homeassistant.config import load_yaml_config_file
+from homeassistant.const import CONF_DEVICES, CONF_NAME, ATTR_ENTITY_ID
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS, ATTR_RGB_COLOR, ATTR_TRANSITION, ATTR_COLOR_TEMP,
     ATTR_FLASH, ATTR_XY_COLOR, FLASH_SHORT, FLASH_LONG, ATTR_EFFECT,
     SUPPORT_BRIGHTNESS, SUPPORT_RGB_COLOR, SUPPORT_XY_COLOR,
     SUPPORT_TRANSITION,
     SUPPORT_COLOR_TEMP, SUPPORT_FLASH, SUPPORT_EFFECT,
-    Light, PLATFORM_SCHEMA)
+    Light, PLATFORM_SCHEMA, VALID_TRANSITION)
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.service import extract_entity_ids
+
+from yeelight.enums import PowerMode
 
 REQUIREMENTS = ['yeelight==0.3.3']
 
@@ -97,6 +102,18 @@ YEELIGHT_EFFECT_LIST = [
     EFFECT_TWITTER,
     EFFECT_STOP]
 
+SERVICE_SET_POWER_MODE = 'yeelight_set_power_mode'
+
+ATTR_POWER_MODE = 'power_mode'
+
+POWER_MODES = [m.name.lower() for m in PowerMode]
+
+YEELIGHT_SET_POWER_MODE_SCHEMA = vol.Schema({
+    ATTR_ENTITY_ID: cv.entity_ids,
+    ATTR_POWER_MODE: vol.In(POWER_MODES),
+    vol.Optional(ATTR_TRANSITION): VALID_TRANSITION
+})
+
 
 # Travis-CI runs too old astroid https://github.com/PyCQA/pylint/issues/1212
 # pylint: disable=invalid-sequence-index
@@ -139,6 +156,21 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
             lights.append(YeelightLight(device, device_config))
 
     add_devices(lights, True)
+
+    def yeelight_set_power_mode(call):
+        """Handler for yeelight_set_power_mode service."""
+        entity_ids = extract_entity_ids(hass, call)
+        for light in lights:
+            if light.entity_id in entity_ids:
+                light.set_power_mode(**call.data)
+
+    descriptions = load_yaml_config_file(
+        os.path.join(os.path.dirname(__file__), 'services.yaml'))
+
+    hass.services.register('light', SERVICE_SET_POWER_MODE,
+                           yeelight_set_power_mode,
+                           descriptions.get(SERVICE_SET_POWER_MODE),
+                           YEELIGHT_SET_POWER_MODE_SCHEMA)
 
 
 class YeelightLight(Light):
@@ -479,3 +511,20 @@ class YeelightLight(Light):
             self._bulb.turn_off(duration=duration)
         except yeelight.BulbException as ex:
             _LOGGER.error("Unable to turn the bulb off: %s", ex)
+
+    def set_power_mode(self, **kwargs) -> None:
+        """Set power mode of the light."""
+        import yeelight
+
+        duration = int(self.config[CONF_TRANSITION])  # in ms
+        if ATTR_TRANSITION in kwargs:  # passed kwarg overrides config
+            duration = int(kwargs.get(ATTR_TRANSITION) * 1000)  # kwarg in s
+
+        power_mode = PowerMode[kwargs.get(ATTR_POWER_MODE).upper()]
+
+        try:
+            _LOGGER.debug("Setting power mode: %s", power_mode.name)
+            self._bulb.turn_on(power_mode=power_mode, duration=duration)
+        except yeelight.BulbException as ex:
+            _LOGGER.error("Unable to set power mode: %s", ex)
+            return
