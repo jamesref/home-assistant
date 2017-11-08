@@ -29,7 +29,6 @@ from homeassistant.components.light import (
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.service import extract_entity_ids
 
-from yeelight.enums import PowerMode
 
 REQUIREMENTS = ['yeelight==0.3.3']
 
@@ -106,14 +105,6 @@ SERVICE_SET_POWER_MODE = 'yeelight_set_power_mode'
 
 ATTR_POWER_MODE = 'power_mode'
 
-POWER_MODES = [m.name.lower() for m in PowerMode]
-
-YEELIGHT_SET_POWER_MODE_SCHEMA = vol.Schema({
-    ATTR_ENTITY_ID: cv.entity_ids,
-    ATTR_POWER_MODE: vol.In(POWER_MODES),
-    vol.Optional(ATTR_TRANSITION): VALID_TRANSITION
-})
-
 
 # Travis-CI runs too old astroid https://github.com/PyCQA/pylint/issues/1212
 # pylint: disable=invalid-sequence-index
@@ -138,6 +129,7 @@ def _cmd(func):
 
 def setup_platform(hass, config, add_devices, discovery_info=None):
     """Set up the Yeelight bulbs."""
+    from yeelight.enums import PowerMode
     lights = []
     if discovery_info is not None:
         _LOGGER.debug("Adding autodetected %s", discovery_info['hostname'])
@@ -167,10 +159,15 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
     descriptions = load_yaml_config_file(
         os.path.join(os.path.dirname(__file__), 'services.yaml'))
 
+    power_mode_schema = vol.Schema({
+        ATTR_ENTITY_ID: cv.entity_ids,
+        ATTR_POWER_MODE: vol.In([m.name.lower() for m in PowerMode]),
+        vol.Optional(ATTR_TRANSITION): VALID_TRANSITION
+    })
     hass.services.register('light', SERVICE_SET_POWER_MODE,
                            yeelight_set_power_mode,
                            descriptions.get(SERVICE_SET_POWER_MODE),
-                           YEELIGHT_SET_POWER_MODE_SCHEMA)
+                           power_mode_schema)
 
 
 class YeelightLight(Light):
@@ -520,7 +517,8 @@ class YeelightLight(Light):
         if ATTR_TRANSITION in kwargs:  # passed kwarg overrides config
             duration = int(kwargs.get(ATTR_TRANSITION) * 1000)  # kwarg in s
 
-        power_mode = PowerMode[kwargs.get(ATTR_POWER_MODE).upper()]
+        power_mode = yeelight.enums.PowerMode[
+            kwargs.get(ATTR_POWER_MODE).upper()]
 
         try:
             _LOGGER.debug("Setting power mode: %s", power_mode.name)
